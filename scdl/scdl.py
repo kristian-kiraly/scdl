@@ -115,6 +115,7 @@ def main():
     Main function, parses the URL from command line arguments
     """
     signal.signal(signal.SIGINT, signal_handler)
+    global time_limit
 
     # Parse arguments
     arguments = docopt(__doc__, version=__version__)
@@ -202,8 +203,8 @@ def main():
     logger.debug("Downloading to " + os.getcwd() + "...")
 
     time_limit = ""
-    if arguments['--duration-limit'] is not None:
-        time_limit = arguments['--duration-limit']
+    if arguments["--duration-limit"] is not None:
+        time_limit = arguments["--duration-limit"]
     
     if not arguments["--name-format"]:
         arguments["--name-format"] = config["scdl"]["name_format"]
@@ -559,7 +560,7 @@ def download_track(client: SoundCloud, track: BasicTrack, playlist_info=None, **
         return
 
     global time_limit
-    track_duration = track['duration']
+    track_duration = track.full_duration
     if track_duration > resolve_time_limit(time_limit)*1000 and resolve_time_limit(time_limit) != 0:
         logger.info('Duration of {0} is longer than specified limit of {1}\n'.format(title, time_limit))
         return

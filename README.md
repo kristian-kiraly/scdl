@@ -97,3 +97,9 @@ scdl me -f
 ## License
 
 [GPL v2](https://www.gnu.org/licenses/gpl-2.0.txt), original author [flyingrub](https://github.com/flyingrub)
+
+# How to install locally:
+
+pip3 install /Path/to/scdl --user
+(Path to folder containing setup.py)
+
