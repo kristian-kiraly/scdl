@@ -7,7 +7,7 @@ Usage:
     scdl (-l <track_url> | me) [-a | -f | -C | -t | -p | -r][-c | --force-metadata][-n <maxtracks>]
 [-o <offset>][--hidewarnings][--debug | --error][--path <path>][--addtofile][--addtimestamp]
 [--onlymp3][--hide-progress][--min-size <size>][--max-size <size>][--remove][--no-album-tag]
-[--no-playlist-folder][--download-archive <file>][--extract-artist][--flac][--original-art]
+[--no-playlist-folder][--download-archive <file>][--extract-artist][--flac][--duration-limit <time>][--original-art]
 [--original-name][--no-original][--only-original][--name-format <format>]
 [--playlist-name-format <format>][--client-id <id>][--auth-token <token>][--overwrite]
     scdl -h | --help
@@ -46,6 +46,7 @@ Options:
     --onlymp3                       Download only the streamable mp3 file,
                                     even if track has a Downloadable file
     --path [path]                   Use a custom path for downloaded files
+    --duration-limit [time]     Set an upper limit for duration of track (i.e. no tracks greater than 10:00)
     --remove                        Remove any files not downloaded from execution
     --flac                          Convert original files to .flac
     --no-album-tag                  On some player track get the same cover art if from the same album, this prevent it
@@ -78,6 +79,7 @@ import sys
 import tempfile
 import time
 import warnings
+import math
 from dataclasses import asdict
 
 import mutagen
@@ -85,12 +87,19 @@ from mutagen.easymp4 import EasyMP4
 
 EasyMP4.RegisterTextKey("website", "purl")
 import requests
+import re
+import tempfile
+import codecs
+import shlex
 from clint.textui import progress
 from docopt import docopt
 from pathvalidate import sanitize_filename
 from soundcloud import BasicAlbumPlaylist, BasicTrack, MiniTrack, SoundCloud
 
 from scdl import __version__, utils
+
+from datetime import datetime
+import subprocess
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logging.getLogger("requests").setLevel(logging.WARNING)
@@ -191,6 +200,10 @@ def main():
             logger.error("Invalid path in arguments...")
             sys.exit(-1)
     logger.debug("Downloading to " + os.getcwd() + "...")
+
+    time_limit = ""
+    if arguments['--duration-limit'] is not None:
+        time_limit = arguments['--duration-limit']
     
     if not arguments["--name-format"]:
         arguments["--name-format"] = config["scdl"]["name_format"]
@@ -522,6 +535,11 @@ def download_hls(client: SoundCloud, track: BasicTrack, title: str, playlist_inf
     return (filename, False)
 
 
+def resolve_time_limit(time_limit=""):
+    if not time_limit:
+        return 0
+    return sum(int(x) * 60 ** i for i,x in enumerate(reversed(time_limit.split(":"))))
+
 def download_track(client: SoundCloud, track: BasicTrack, playlist_info=None, **kwargs):
     """
     Downloads a track
@@ -538,6 +556,12 @@ def download_track(client: SoundCloud, track: BasicTrack, playlist_info=None, **
     # Geoblocked track
     if track.policy == "BLOCK":
         logger.error(f"{title} is not available in your location...\n")
+        return
+
+    global time_limit
+    track_duration = track['duration']
+    if track_duration > resolve_time_limit(time_limit)*1000 and resolve_time_limit(time_limit) != 0:
+        logger.info('Duration of {0} is longer than specified limit of {1}\n'.format(title, time_limit))
         return
 
     # Downloadable track
