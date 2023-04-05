@@ -77,7 +77,6 @@ mimetypes.init()
 import os
 import pathlib
 import shutil
-#import signal
 import subprocess
 import sys
 import tempfile
@@ -133,7 +132,6 @@ def main():
     """
     Main function, parses the URL from command line arguments
     """
-    #signal.signal(signal.SIGINT, signal_handler)
     global time_limit
 
     # exit if ffmpeg not installed
@@ -738,7 +736,6 @@ def download_track(client: SoundCloud, track: BasicTrack, playlist_info=None, ex
         if track.policy == "BLOCK":
             raise SoundCloudException(f"{title} is not available in your location...")
 
-        #global time_limit
         track_duration = track.full_duration
         if track_duration > resolve_time_limit(time_limit)*1000 and resolve_time_limit(time_limit) != 0:
             logger.info('Duration of {0} is longer than specified limit of {1}\n'.format(title, time_limit))
