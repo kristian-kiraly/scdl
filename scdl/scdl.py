@@ -77,6 +77,7 @@ mimetypes.init()
 import os
 import pathlib
 import shutil
+#import signal
 import subprocess
 import sys
 import tempfile
@@ -132,7 +133,7 @@ def main():
     """
     Main function, parses the URL from command line arguments
     """
-    signal.signal(signal.SIGINT, signal_handler)
+    #signal.signal(signal.SIGINT, signal_handler)
     global time_limit
 
     # exit if ffmpeg not installed
@@ -142,6 +143,9 @@ def main():
 
     # Parse arguments
     arguments = docopt(__doc__, version=__version__)
+    python_args = {
+        "offset": 1
+    }
 
     if arguments["--debug"]:
         logger.level = logging.DEBUG
@@ -155,6 +159,13 @@ def main():
 
     # import conf file
     config = get_config(config_file)
+    # change download path
+    path = config["scdl"]["path"]
+    if os.path.exists(path):
+        os.chdir(path)
+    else:
+        logger.error(f"Invalid download path '{path}' in {config_file}")
+        sys.exit(-1)
 
     logger.info("Soundcloud Downloader")
     logger.debug(arguments)
@@ -727,7 +738,7 @@ def download_track(client: SoundCloud, track: BasicTrack, playlist_info=None, ex
         if track.policy == "BLOCK":
             raise SoundCloudException(f"{title} is not available in your location...")
 
-        global time_limit
+        #global time_limit
         track_duration = track.full_duration
         if track_duration > resolve_time_limit(time_limit)*1000 and resolve_time_limit(time_limit) != 0:
             logger.info('Duration of {0} is longer than specified limit of {1}\n'.format(title, time_limit))
