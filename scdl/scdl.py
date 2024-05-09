@@ -594,7 +594,10 @@ def download_original_file(client: SoundCloud, track: BasicTrack, title: str, pl
         # Find file extension
         mime = r.headers.get("content-type")
         ext = ext or mimetypes.guess_extension(mime)
-        filename += ext
+        if ext is None:
+            filename += "mp3"
+        else:
+            filename += ext
 
         filename = get_filename(track, filename, playlist_info=playlist_info, **kwargs)
 
