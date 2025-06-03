@@ -105,3 +105,13 @@ scdl me -f
 * Sync Playlist
 * Set the tags with mutagen (Title / Artist / Album / Artwork)
 * Create playlist files when downloading a playlist
+
+
+## License
+
+[GPL v2](https://www.gnu.org/licenses/gpl-2.0.txt), original author [flyingrub](https://github.com/flyingrub)
+
+# How to install locally:
+
+pip3 install /Path/to/scdl --user
+(Path to folder containing setup.py)

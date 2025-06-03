@@ -5,7 +5,7 @@ Usage:
     [-c | --force-metadata][-n <maxtracks>][-o <offset>][--hidewarnings][--debug | --error]
     [--path <path>][--addtofile][--addtimestamp][--onlymp3][--hide-progress][--min-size <size>]
     [--max-size <size>][--remove][--no-album-tag][--no-playlist-folder]
-    [--download-archive <file>][--sync <file>][--extract-artist][--flac][--original-art]
+    [--download-archive <file>][--sync <file>][--extract-artist][--flac][--duration-limit <time>][--original-art]
     [--original-name][--original-metadata][--no-original][--only-original]
     [--name-format <format>][--strict-playlist][--playlist-name-format <format>]
     [--client-id <id>][--auth-token <token>][--overwrite][--no-playlist][--opus]
@@ -49,6 +49,7 @@ Options:
                                     instead of making a playlist subfolder
     --onlymp3                       Download only mp3 files
     --path [path]                   Use a custom path for downloaded files
+    --duration-limit [time]     Set an upper limit for duration of track (i.e. no tracks greater than 10:00)
     --remove                        Remove any files not downloaded from execution
     --sync [file]                   Compares an archive file to a playlist and downloads/removes
                                     any changed tracks
@@ -94,6 +95,7 @@ import traceback
 import typing
 import urllib.parse
 import warnings
+import math
 from dataclasses import asdict
 from functools import lru_cache
 from types import TracebackType
@@ -138,6 +140,11 @@ from scdl.metadata_assembler import MetadataInfo, assemble_metadata
 
 mimetypes.init()
 
+from datetime import datetime
+import subprocess
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.getLogger("requests").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addFilter(utils.ColorizeFilter())
@@ -303,11 +310,17 @@ def get_filelock(path: Union[pathlib.Path, str], timeout: int = 10) -> SafeLock:
 
 
 def main() -> None:
+
+    global time_limit
+
     """Main function, parses the URL from command line arguments"""
     logger.addHandler(logging.StreamHandler())
 
     # Parse arguments
     arguments = docopt(__doc__, version=__version__)
+    python_args = {
+        "offset": 1
+    }
 
     if arguments["--debug"]:
         logger.level = logging.DEBUG
@@ -321,6 +334,13 @@ def main() -> None:
 
     # import conf file
     config = get_config(config_file)
+    # change download path
+    path = config["scdl"]["path"]
+    if os.path.exists(path):
+        os.chdir(path)
+    else:
+        logger.error(f"Invalid download path '{path}' in {config_file}")
+        sys.exit(-1)
 
     logger.info("Soundcloud Downloader")
     logger.debug(arguments)
@@ -387,6 +407,18 @@ def main() -> None:
 
     if arguments["--hidewarnings"]:
         warnings.filterwarnings("ignore")
+
+    if arguments["--path"] is not None:
+        if os.path.exists(arguments["--path"]):
+            os.chdir(arguments["--path"])
+        else:
+            logger.error("Invalid path in arguments...")
+            sys.exit(-1)
+    logger.debug("Downloading to " + os.getcwd() + "...")
+
+    time_limit = ""
+    if arguments["--duration-limit"] is not None:
+        time_limit = arguments["--duration-limit"]
 
     if not arguments["--name-format"]:
         arguments["--name-format"] = config["scdl"]["name_format"]
@@ -1061,6 +1093,11 @@ def download_hls(
     return filename, False
 
 
+def resolve_time_limit(time_limit=""):
+    if not time_limit:
+        return 0
+    return sum(int(x) * 60 ** i for i,x in enumerate(reversed(time_limit.split(":"))))
+
 def download_track(
     client: SoundCloud,
     track: Union[BasicTrack, Track],
@@ -1087,6 +1124,11 @@ def download_track(
         client_user_id = me and me.id
 
         lock = get_filelock(pathlib.Path(f"./{track.id}"), 0)
+
+        track_duration = track.full_duration
+        if track_duration > resolve_time_limit(time_limit)*1000 and resolve_time_limit(time_limit) != 0:
+            logger.info('Duration of {0} is longer than specified limit of {1}\n'.format(title, time_limit))
+            return
 
         # Downloadable track
         filename = None
