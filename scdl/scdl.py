@@ -143,8 +143,6 @@ mimetypes.init()
 from datetime import datetime
 import subprocess
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
-logging.getLogger("requests").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addFilter(utils.ColorizeFilter())
