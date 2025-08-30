@@ -554,6 +554,10 @@ def _build_ytdl_params(url: str, scdl_args: SCDLArgs) -> tuple[str, dict, list]:
 
     return url, utils.cli_to_api(argv), postprocessors
 
+def resolve_time_limit(time_limit=""):
+    if not time_limit:
+        return 0
+    return sum(int(x) * 60 ** i for i,x in enumerate(reversed(time_limit.split(":"))))
 
 def download_url(url: str, **scdl_args: Unpack[SCDLArgs]) -> None:
     url, params, postprocessors = _build_ytdl_params(url, scdl_args)
@@ -578,6 +582,22 @@ def download_url(url: str, **scdl_args: Unpack[SCDLArgs]) -> None:
             ydl.add_post_processor(pp, when)
 
         sync = SyncDownloadHelper(scdl_args, ydl)
+
+        # Pre-check track duration before download
+        info = ydl.extract_info(url, download=False)
+        duration = info.get("duration")
+
+        logger.debug("Got duration %s", duration)
+
+        if duration and time_limit and resolve_time_limit(time_limit) != 0 and duration > resolve_time_limit(time_limit)*1000:
+            logger.info(
+                "Skipping %s (duration %s exceeds limit %s)",
+                info.get("title", "Unknown"),
+                duration,
+                time_limit,
+            )
+            return
+
         ydl.download(url)
         sync.post_download()
 
