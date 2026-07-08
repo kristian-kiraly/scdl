@@ -4,7 +4,7 @@ Usage:
     scdl (-l <track_url> | -s <search_query> | me) [-a | -f | -C | -t | -p | -r]
     [-c | --force-metadata][-o <offset>][--hidewarnings][--debug | --error]
     [--path <path>][--addtofile][--addtimestamp][--onlymp3][--hide-progress][--min-size <size>]
-    [--max-size <size>][--no-album-tag][--no-playlist-folder]
+    [--max-size <size>][--no-album-tag][--no-playlist-folder][--duration-limit <time>]
     [--download-archive <file>][--sync <file>][--extract-artist][--flac][--original-art]
     [--original-name][--original-metadata][--no-original][--only-original]
     [--name-format <format>][--strict-playlist][--playlist-name-format <format>]
@@ -53,6 +53,7 @@ Options:
                                     file is lossless quality
     --no-album-tag                  On some player track get the same cover art if from the same
                                     album, this prevent it
+    --duration-limit [time]         Set an upper limit for duration of a track, e.g. 10:00
     --original-art                  Download original cover art, not just 500x500 JPEG
     --original-name                 Do not change name of original file downloads
     --original-metadata             Do not change metadata of original file downloads
@@ -77,6 +78,7 @@ from __future__ import annotations
 import configparser
 import importlib
 import importlib.metadata
+import json
 import logging
 import os
 import posixpath
@@ -123,6 +125,7 @@ class SCDLArgs(TypedDict):
     client_id: str | None
     debug: bool
     download_archive: str | None
+    duration_limit: str | None
     error: bool
     extract_artist: bool
     f: bool
@@ -280,6 +283,14 @@ def _search_soundcloud(client: SoundCloud, query: str) -> str | None:
         logger.error(f"Error searching SoundCloud: {e}")
         return None
 
+
+
+
+def resolve_time_limit(time_limit: str = "") -> int:
+    """Convert HH:MM:SS or MM:SS into seconds."""
+    if not time_limit:
+        return 0
+    return sum(int(x) * 60 ** i for i, x in enumerate(reversed(time_limit.split(":"))))
 
 def _get_config(config_file: Path) -> configparser.RawConfigParser:
     """Gets config from scdl.cfg"""
@@ -491,7 +502,9 @@ def _build_ytdl_params(url: str, scdl_args: SCDLArgs) -> tuple[str, dict, list]:
         params["--force-overwrites"] = True
 
     if scdl_args.get("no_playlist"):
-        params["--match-filters"] = "!playlist_uploader"
+        existing = params.get("--match-filters")
+        filt = "!playlist_uploader"
+        params["--match-filters"] = f"{existing} & {filt}" if existing else filt
 
     if scdl_args.get("add_description"):
         params["--print-to-file"] = (
@@ -524,6 +537,52 @@ def _build_ytdl_params(url: str, scdl_args: SCDLArgs) -> tuple[str, dict, list]:
     return url, utils.cli_to_api(argv), postprocessors
 
 
+def _duration_cache_path(download_archive: str | None) -> Path | None:
+    """Derive the duration-cache sidecar path from --download-archive.
+
+    Deliberately a *separate* file from the download archive itself. The
+    archive means "this file was downloaded"; caching a --duration-limit
+    rejection there too would mean that dropping or raising the limit on a
+    later run makes tracks look already-downloaded when they were never
+    actually fetched. This file instead stores plain facts (track ID ->
+    duration in seconds) with no notion of "should this be skipped" baked
+    in, so any run's --duration-limit value gets applied freshly against
+    the same cached ground truth, no matter what limit (if any) previous
+    runs used.
+    """
+    if not download_archive:
+        return None
+    return Path(str(download_archive)).with_suffix(".durations.jsonl")
+
+
+def _load_duration_cache(path: Path) -> dict[str, float]:
+    cache: dict[str, float] = {}
+    if not path.exists():
+        return cache
+    try:
+        with locked_file(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    cache[str(entry["id"])] = float(entry["duration"])
+                except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                    continue
+    except OSError:
+        logger.debug(f"Could not read duration cache at {path}", exc_info=True)
+    return cache
+
+
+def _append_duration_cache(path: Path, track_id: str, duration: float) -> None:
+    try:
+        with locked_file(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"id": track_id, "duration": duration}) + "\n")
+    except OSError:
+        logger.debug(f"Could not write duration cache entry for {track_id}", exc_info=True)
+
+
 def download_url(url: str, **scdl_args: Unpack[SCDLArgs]) -> None:
     url, params, postprocessors = _build_ytdl_params(url, scdl_args)
 
@@ -539,6 +598,38 @@ def download_url(url: str, **scdl_args: Unpack[SCDLArgs]) -> None:
         argv = shlex.split(yt_dlp_args)
         overrides = utils.cli_to_api(argv)
         params = {**params, **overrides}
+
+    duration_limit = scdl_args.get("duration_limit")
+    if duration_limit:
+        limit_seconds = resolve_time_limit(duration_limit)
+        base_match_filter = params.get("match_filter")
+        cache_path = _duration_cache_path(scdl_args.get("download_archive"))
+        duration_cache = _load_duration_cache(cache_path) if cache_path else {}
+
+        def duration_filter(info_dict: dict, *, incomplete: bool = False) -> str | None:
+            track_id = info_dict.get("id")
+            duration = duration_cache.get(str(track_id)) if track_id is not None else None
+            if duration is None:
+                # Not cached yet - use whatever this extraction pass knows. If this
+                # is the pass that finally resolved it, remember it for next time,
+                # regardless of whether it happens to pass *this* run's limit -
+                # a future run might use a different --duration-limit (or none),
+                # and the cached fact stays correct either way.
+                duration = info_dict.get("duration")
+                if duration is not None and track_id is not None and cache_path:
+                    duration_cache[str(track_id)] = float(duration)
+                    _append_duration_cache(cache_path, str(track_id), float(duration))
+            if duration is not None and duration > limit_seconds:
+                title = info_dict.get("title") or track_id or "entry"
+                return f"{title} duration {duration:.0f}s exceeds --duration-limit ({limit_seconds}s), skipping"
+            if base_match_filter is not None:
+                try:
+                    return base_match_filter(info_dict, incomplete=incomplete)
+                except TypeError:
+                    return None if incomplete else base_match_filter(info_dict)
+            return None
+
+        params["match_filter"] = duration_filter
 
     with YoutubeDL(params) as ydl:
         if scdl_args["client_id"]:
